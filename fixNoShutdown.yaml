@@ -1,0 +1,54 @@
+- hosts: workstations
+  gather_facts: false
+  vars_prompt:
+   - name: "ansible_become_pass"
+     prompt: "sudo password"
+     private: yes
+  become: true
+  become_method: sudo
+  
+  vars:
+    share_path: /share
+    autofs_mount_path: /home/cblanchard/nfs
+
+  tasks:
+    - name: stop and disable autofs
+      service:
+        name: autofs
+        state: stopped
+        enabled: false
+
+    - name: unmount autofs share
+      mount:
+        path: "{{autofs_mount_path}}"
+        state: unmounted
+    
+    - stat:
+        path: "{{share_path}}"
+      register: link
+
+    - name: remove share symlink
+      file:
+        path: "{{share_path}}"
+        state: absent
+      when: link.stat.exists and link.stat.islnk
+    
+    - name: make share directory
+      file:
+        path: "{{share_path}}"
+        state: directory
+
+    - name: Populate service facts
+      service_facts:
+
+    - name: Add fstab entry with 
+      shell: "echo 'nfs_share:/share /home/cblanchard/nfs/ nfs rw 0 0' >> /etc/fstab"
+      when: ansible_facts.services['NetworkManager-wait-online.service'].state == 'failed'
+
+    - name: Add fstab entry with __netdev
+      shell: "echo 'nfs_share:/share /home/cblanchard/nfs/ nfs rw 0 0' >> /etc/fstab"
+      when: ansible_facts.services['NetworkManager-wait-online.service'].state == 'stopped'
+
+    - name: Mount nfs share
+      shell: "mount -a"
+
