@@ -1,0 +1,68 @@
+###########################################################
+# Playbook Name: mountWithFstab.yaml
+# Description: Changes autofs mounting to be done via fstab
+# Date: 8/27/2023
+###########################################################
+- hosts: hosts_you_want_to_change
+  gather_facts: false
+  vars_prompt:
+   - name: "ansible_become_pass"
+     prompt: "sudo password"
+     private: yes
+  become: true
+  become_method: sudo
+  vars:
+    share_server: your_nfs_server
+    share_path: your_nfs_mount_folder
+    autofs_mount_path: your_old_nfs_autofs_mount
+  tasks:
+    # Stops and disables autofs
+    - name: stop and disable autofs
+      service:
+        name: autofs
+        state: stopped
+        enabled: false
+    # Umounts the old autofs share
+    - name: unmount autofs share
+      mount:
+        path: "{{autofs_mount_path}}"
+        state: unmounted
+    # Finds out if share_path is a link
+    - stat:
+        path: "{{share_path}}"
+      register: link
+    # Removes share_path if it is a link
+    - name: remove share symlink if it exists
+      file:
+        path: "{{share_path}}"
+        state: absent
+      when: link.stat.exists and link.stat.islnk
+    # Makes the share_path directory if it doesn't exist
+    - name: make share directory
+      file:
+        path: "{{share_path}}"
+        state: directory
+    # Finds out what services are running
+    - name: populate service facts
+      service_facts:
+    # Finds out if there is already an fstab entry that mounts to share_path
+    - name: read fstab file
+      find:
+        name: "/etc/"
+        patterns: "fstab"
+        file_type: file
+        use_regex: false
+        read_whole_file: true
+        contains: "{{share_path}}"
+      register: find_result
+    # Makes a new fstab entry if an entry doesn't already exist and if the NetworkManager-wait-online.service has failed
+    - name: add fstab entry with x-systemd.automount
+      shell: "echo '{{share_server}}:{{share_path}} {{share_path}} nfs rw,hard,x-systemd.automount 0 0' >> /etc/fstab"
+      when: ansible_facts.services['NetworkManager-wait-online.service'].state == 'failed' and find_result.matched == 0
+    # Makes a new fstab entry if an entry doesn't already exist and if the NetworkManager-wait-online.service has ran successfully
+    - name: add fstab entry with __netdev
+      shell: "echo '{{share_server}}:{{share_path}} {{share_path}} nfs rw,hard,__netdev 0 0' >> /etc/fstab"
+      when: ansible_facts.services['NetworkManager-wait-online.service'].state == 'stopped' and find_result.matched == 0
+    # Runs the mount -a command to make sure the new config is good
+    - name: run mount -a
+      shell: "mount -a"
